@@ -1,0 +1,8 @@
+dist/
+build/
+setup_output/
+dev_setup/
+models/
+__pycache__/
+*.pyc
+venv/
