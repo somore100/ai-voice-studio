@@ -1,0 +1,10 @@
+TTS
+torch
+torchaudio
+openai-whisper
+vosk
+pygame
+SpeechRecognition
+PyAudio
+numpy
+librosa
