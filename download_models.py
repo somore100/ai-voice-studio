@@ -14,6 +14,7 @@ os.environ["TTS_HOME"] = _MODELS_DIR
 os.makedirs(_MODELS_DIR, exist_ok=True)
 
 print(f"Models directory: {_MODELS_DIR}")
+os.environ["COQUI_TOS_AGREED"] = "1"  # auto-accept Coqui license
 
 
 def download_whisper():
