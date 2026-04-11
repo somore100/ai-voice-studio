@@ -18,6 +18,11 @@ jobs:
       with:
         python-version: "3.10"
 
+    - name: Install espeak-ng
+      run: choco install espeak --yes
+      shell: cmd
+      continue-on-error: true
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -28,7 +33,7 @@ jobs:
 
     - name: Build EXE
       run: |
-        set AVS_CONSOLE=0
+        set AVS_CONSOLE=1
         python -m PyInstaller ai_voice_studio.spec --clean --noconfirm
       shell: cmd
 
@@ -38,12 +43,23 @@ jobs:
         curl -L "https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip" -o python_embed.zip
         tar -xf python_embed.zip -C python_bundled
         curl -L "https://bootstrap.pypa.io/get-pip.py" -o get-pip.py
-        :: Fix embeddable Python so pip works - uncomment import site
         powershell -Command "(Get-Content python_bundled\python310._pth) -replace '#import site','import site' | Set-Content python_bundled\python310._pth"
         python_bundled\python.exe get-pip.py --no-warn-script-location
         del get-pip.py
-        echo Bundled Python ready
       shell: cmd
+
+    - name: Bundle espeak-ng for installer
+      run: |
+        mkdir espeak_bundled
+        if exist "C:\Program Files\eSpeak NG" (
+          xcopy "C:\Program Files\eSpeak NG" espeak_bundled /E /I /Q
+        ) else if exist "C:\Program Files (x86)\eSpeak" (
+          xcopy "C:\Program Files (x86)\eSpeak" espeak_bundled /E /I /Q
+        ) else (
+          echo eSpeak not found at expected path, skipping bundle
+        )
+      shell: cmd
+      continue-on-error: true
 
     - name: Install Inno Setup
       run: choco install innosetup --yes
@@ -60,4 +76,11 @@ jobs:
       with:
         name: AI_Voice_Studio_Setup
         path: setup_output\AI_Voice_Studio_Setup_v1.0.exe
+        retention-days: 30
+
+    - name: Upload EXE only
+      uses: actions/upload-artifact@v4
+      with:
+        name: AI_Voice_Studio_EXE
+        path: dist\AI_Voice_Studio\
         retention-days: 30
