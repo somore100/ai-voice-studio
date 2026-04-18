@@ -15,7 +15,7 @@ import pygame
 #  PERSISTENT CONFIG
 # ──────────────────────────────────────────────────────────────
 LAST_FOLDER     = r"C:/Users/Dominik Žibert/Documents/ai_voice/audio"  # auto-updates on browse
-SAVED_FAVORITES = ["Adam", "Emma"]  # auto-updates when you star/unstar voices
+SAVED_FAVORITES = ['Emma', 'Olivia']  # auto-updates when you star/unstar voices
 
 # ──────────────────────────────────────────────────────────────
 #  MODEL PATHS
