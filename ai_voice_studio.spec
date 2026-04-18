@@ -27,16 +27,33 @@ _vosk_datas = [(os.path.join(_vosk_dir, f), 'vosk')
                for f in os.listdir(_vosk_dir)
                if os.path.isfile(os.path.join(_vosk_dir, f))]
 
-# ── Models folder (optional) ──────────────────────────────────
+# ── Collect TTS data files ───────────────────────────────────
+try:
+    from PyInstaller.utils.hooks import collect_data_files
+    _tts_datas = collect_data_files('TTS')
+except Exception:
+    _tts_datas = []
+
+# ── Collect trainer data files ───────────────────────────────
+try:
+    _trainer_datas = collect_data_files('trainer')
+except Exception:
+    _trainer_datas = []
+
+# ── Models folder (optional) ─────────────────────────────────
 _model_datas = [('models', 'models')] if os.path.isdir('models') else []
 
 a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=_vosk_binaries,
-    datas=_vosk_datas + _model_datas,
+    datas=_vosk_datas + _model_datas + _tts_datas + _trainer_datas,
     hiddenimports=[
         'TTS', 'TTS.api', 'TTS.tts', 'TTS.tts.configs.xtts_config',
+        'TTS.tts.configs', 'TTS.tts.models', 'TTS.tts.utils',
+        'TTS.tts.layers', 'TTS.utils.audio', 'TTS.utils.io',
+        'TTS.config', 'TTS.encoder', 'TTS.vocoder',
+        'coqpit', 'trainer',
         'TTS.tts.models.xtts', 'TTS.utils', 'TTS.vocoder',
         'whisper', 'whisper.audio', 'whisper.decoding',
         'whisper.model', 'whisper.tokenizer', 'whisper.transcribe',
