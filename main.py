@@ -702,11 +702,10 @@ class AIApp:
             if filt == "Fav"    and name not in self.favorites: continue
             if filt == "Male"   and gender != "M":              continue
             if filt == "Female" and gender != "F":              continue
-            star  = "* " if name in self.favorites else ""
-            gicon = "M " if gender == "M" else "F "
-            entries.append((name in self.favorites, name, f"{star}{gicon}{disp(name,sid)}"))
+            star  = "★ " if name in self.favorites else ""
+            entries.append((name in self.favorites, name, f"{star}{name}"))
         entries.sort(key=lambda x: (not x[0], x[1]))
-        self._voice_name_map = {e[2]: e[1] for e in entries}
+        self._voice_name_map = {e[2]: e[1] for e in entries}  # display -> real name
         display = [e[2] for e in entries]
         self.speaker_dropdown["values"] = display
         if display:
