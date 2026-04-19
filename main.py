@@ -1185,9 +1185,16 @@ AIApp._do_download_one       = _do_download_one
 AIApp._do_download_model     = _do_download_model
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app  = AIApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app  = AIApp(root)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        print("\n=== FATAL ERROR ===")
+        traceback.print_exc()
+        print("===================")
+        input("Press Enter to close...")
 
 
 # ──────────────────────────────────────────────────────────────
