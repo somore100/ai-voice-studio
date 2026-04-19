@@ -343,17 +343,21 @@ class AIApp:
         self._build_footer()
 
         root.after(150, lambda: self._scroller.bind_all_mousewheel(self._inner))
-        root.after(400, self._request_mic_permission)
+        root.after(1000, self._request_mic_permission)
 
     def _request_mic_permission(self):
-        allowed = ask_mic_permission(self.root)
-        self._mic_allowed = allowed
-        if allowed:
-            self._stt_note.config(text="Microphone access granted", fg=GREEN)
-            self.root.after(3000, lambda: self._stt_note.config(
-                text="Don't forget to choose the right microphone!", fg=YELLOW))
-        else:
-            self._stt_note.config(text="Microphone denied - STT won't work", fg=RED)
+        try:
+            allowed = ask_mic_permission(self.root)
+            self._mic_allowed = allowed
+            if allowed:
+                self._stt_note.config(text="Microphone access granted", fg=GREEN)
+                self.root.after(3000, lambda: self._stt_note.config(
+                    text="Don't forget to choose the right microphone!", fg=YELLOW))
+            else:
+                self._stt_note.config(text="Microphone access denied", fg=RED)
+        except Exception as e:
+            print(f"Mic permission error: {e}")
+            self._mic_allowed = True  # assume allowed if dialog fails
 
     def _lf(self, title, fg_title=PURPLE):
         f = tk.LabelFrame(self._inner, text=f"  {title}  ",
