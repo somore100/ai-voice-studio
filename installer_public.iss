@@ -63,6 +63,10 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#AppShortName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\logo.ico"; Tasks: desktopicon
 
 [Run]
+; Install Visual C++ 2015-2022 Redistributable (required by PyTorch/Python)
+Filename: "{app}\python\python.exe"; Parameters: "-c ""import urllib.request; urllib.request.urlretrieve('https://aka.ms/vs/17/release/vc_redist.x64.exe', r'{tmp}\vc_redist.exe')"""; StatusMsg: "Downloading Visual C++ Runtime..."; Flags: runhidden waituntilterminated
+Filename: "{tmp}\vc_redist.exe"; Parameters: "/quiet /norestart"; StatusMsg: "Installing Visual C++ Runtime..."; Flags: waituntilterminated
+
 ; Use bundled Python to install packages and download models
 Filename: "{app}\python\python.exe"; Parameters: "-m pip install TTS openai-whisper vosk pygame SpeechRecognition PyAudio numpy librosa"; StatusMsg: "Installing packages..."; Flags: runhidden waituntilterminated
 Filename: "{app}\python\python.exe"; Parameters: "-m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu"; StatusMsg: "Installing PyTorch (large download)..."; Flags: runhidden waituntilterminated
