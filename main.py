@@ -1,5 +1,19 @@
 import os
+import sys
+
+# Early crash logger - writes to app folder before anything else loads
+try:
+    _log_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'startup.log')
+    _log = open(_log_path, 'w')
+    _log.write('Starting...\n'); _log.flush()
+    def _logw(msg):
+        _log.write(msg + '\n'); _log.flush()
+except:
+    def _logw(msg): pass
+
+_logw('Python imports starting')
 import tkinter as tk
+_logw('tkinter ok')
 from tkinter import messagebox, ttk, filedialog
 import threading
 import random
@@ -9,7 +23,9 @@ import urllib.request
 import urllib.parse
 import json
 import speech_recognition as sr
+_logw("speech_recognition ok")
 import pygame
+_logw("pygame ok")
 
 # ──────────────────────────────────────────────────────────────
 #  PERSISTENT CONFIG
@@ -1185,8 +1201,10 @@ AIApp._do_download_one       = _do_download_one
 AIApp._do_download_model     = _do_download_model
 
 if __name__ == "__main__":
+    _logw("Starting UI")
     try:
         root = tk.Tk()
+        _logw("Tk created")
         app  = AIApp(root)
         root.mainloop()
     except Exception as e:
