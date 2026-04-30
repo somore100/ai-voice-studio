@@ -29,7 +29,7 @@ jobs:
     - name: Build EXE
       run: |
         set AVS_CONSOLE=0
-        python -m PyInstaller ai_voice_studio.spec --clean --noconfirm --debug bootloader
+        python -m PyInstaller ai_voice_studio.spec --clean --noconfirm
       shell: cmd
 
     - name: Download and prepare bundled Python 3.10
