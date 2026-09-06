@@ -53,11 +53,16 @@ class EngineSpec:
     #   Cheap enough to call on every "Check All" / startup check.
     is_installed: Optional[Callable[[], bool]] = None
 
-    # download() -> None
+    # download(progress_cb=None) -> None
     #   BLOCKING call. The caller (main.py) runs it on a background
     #   thread and catches exceptions - engines should just raise on
-    #   failure rather than swallowing errors themselves.
-    download: Optional[Callable[[], None]] = None
+    #   failure rather than swallowing errors themselves. If the engine
+    #   can report real byte-level progress, it should call
+    #   progress_cb(downloaded_bytes, total_bytes) periodically (from
+    #   whatever thread download() itself runs on - the caller
+    #   marshals to the main thread). Engines that can't report
+    #   progress (e.g. a pip install) should simply ignore progress_cb.
+    download: Optional[Callable[..., None]] = None
 
     # list_voices() -> list[str]
     #   Speaker/voice IDs this engine offers, or [] for a single-voice

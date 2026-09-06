@@ -26,9 +26,11 @@ def build(models_base):
             for d in os.listdir(cache) if "vctk" in d
         )
 
-    def download():
+    def download(progress_cb=None):
         from TTS.api import TTS
-        TTS(model_name="tts_models/en/vctk/vits", progress_bar=False, gpu=False)
+        from .download_progress import progress_hook
+        with progress_hook(progress_cb):
+            TTS(model_name="tts_models/en/vctk/vits", progress_bar=True, gpu=False)
 
     def _get_instance():
         global _instance

@@ -40,9 +40,10 @@ except Exception as _e:
 #  EAGER TTS IMPORT (same reasoning as torch above)
 # ──────────────────────────────────────────────────────────────
 # TTS was never imported at module scope anywhere in this file — every
-# `from TTS.api import TTS` lives inside get_tts_vctk()/get_tts_xtts()/
-# _do_download_model(), and every one of those only ever runs on a
-# background thread (Preview/Save/download all use threading.Thread).
+# `from TTS.api import TTS` lives inside the engines/coqui_vctk.py and
+# engines/coqui_xtts.py modules' download()/_get_instance() functions,
+# and every one of those only ever runs on a background thread
+# (Preview/Save/download all use threading.Thread).
 # So the very first import of TTS under PyInstaller's frozen importer
 # happened on a background thread, hitting the same class of race as
 # the torch bug above — except for TTS it surfaces as:
@@ -98,116 +99,59 @@ _ESPEAK_PATH = os.path.join(_BASE, "espeak")
 if os.path.isdir(_ESPEAK_PATH):
     os.environ["PHONEMIZER_ESPEAK_PATH"] = _ESPEAK_PATH
     os.environ["ESPEAK_DATA_PATH"]       = os.path.join(_ESPEAK_PATH, "espeak-ng-data")
-VCTK_MODEL_PATH   = os.path.join(_MODELS_BASE, "vctk")
-XTTS_MODEL_PATH   = os.path.join(_MODELS_BASE, "xtts_v2")
+# VCTK/XTTS's own local-vs-cache path resolution now lives inside their
+# engine modules (engines/coqui_vctk.py, engines/coqui_xtts.py), each
+# given _MODELS_BASE via TTS_ENGINES = get_tts_engines(_MODELS_BASE) below.
 WHISPER_MODEL_DIR = os.path.join(_MODELS_BASE, "whisper")
 VOSK_MODEL_DIR    = os.path.join(_MODELS_BASE, "vosk")
 
 
-def _get_tts_cache_dir():
-    """Return the directory Coqui TTS actually downloads models into.
-
-    This mirrors trainer.io.get_user_data_dir("tts") exactly (the function
-    TTS itself calls internally in utils/manage.py), so our "is this model
-    already downloaded?" check always looks in the same place TTS put it.
-    Previously this was guessed from the Windows-only LOCALAPPDATA env var,
-    which is empty on Linux/macOS, so downloaded models were never found by
-    the status check even though the download itself had succeeded.
-    """
-    try:
-        from trainer.io import get_user_data_dir
-        return str(get_user_data_dir("tts"))
-    except Exception:
-        # Fallback: reimplement the same platform logic trainer.io uses,
-        # in case the trainer package isn't importable yet (e.g. checking
-        # status before TTS/trainer are installed).
-        tts_home = os.environ.get("TTS_HOME")
-        xdg_home = os.environ.get("XDG_DATA_HOME")
-        if tts_home:
-            base = os.path.expanduser(tts_home)
-        elif xdg_home:
-            base = os.path.expanduser(xdg_home)
-        elif sys.platform == "win32":
-            base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-        elif sys.platform == "darwin":
-            base = os.path.expanduser("~/Library/Application Support")
-        else:
-            base = os.path.expanduser("~/.local/share")
-        return os.path.join(base, "tts")
-
-
-def _dir_has_substantial_file(dirpath, min_bytes=10 * 1024 * 1024):
-    """True if dirpath exists and contains at least one file >= min_bytes.
-
-    Used to tell a genuinely completed model download apart from an empty
-    or partial one. Coqui's downloader creates the destination folder
-    immediately, before any file content exists in it - so merely checking
-    os.path.isdir()/os.listdir() for the folder's presence (what this used
-    to do) reports "Ready" even for a download that was interrupted (e.g.
-    the app was closed mid-download, killing the daemon download thread)
-    and left only an empty stub folder behind. Real TTS model checkpoints
-    are tens of MB (VCTK) to ~1.8GB (XTTS-v2), so a low size threshold like
-    10MB safely distinguishes "actually downloaded" from "empty stub".
-    """
-    if not os.path.isdir(dirpath):
-        return False
-    for root, _dirs, files in os.walk(dirpath):
-        for fname in files:
-            try:
-                if os.path.getsize(os.path.join(root, fname)) >= min_bytes:
-                    return True
-            except OSError:
-                continue
-    return False
+# ──────────────────────────────────────────────────────────────
+#  TTS ENGINE REGISTRY
+# ──────────────────────────────────────────────────────────────
+# All pluggable TTS engines (VCTK, XTTS-v2 today; Piper/Kokoro/Fish
+# Speech/MeloTTS/ChatTTS as they're added) live in the engines/ package
+# and register themselves here. The Models table, Check All/Download
+# Missing flow, and per-engine license dialogs below all drive off this
+# dict instead of hardcoding engine names/paths - see engines/registry.py
+# for how to add a new engine.
+from engines.registry import get_tts_engines
+TTS_ENGINES = get_tts_engines(_MODELS_BASE)
 
 
 # ──────────────────────────────────────────────────────────────
-#  XTTS TERMS-OF-SERVICE (CPML) HANDLING
+#  PER-ENGINE LICENSE (TOS) HANDLING
 # ──────────────────────────────────────────────────────────────
-# Coqui's own download code (TTS/utils/manage.py: create_dir_and_download_model
-# -> ask_tos) blocks with a plain input() call in the terminal to get CPML
-# license agreement before downloading XTTS-v2. That's fine in a dev
-# terminal, but:
-#   1. Our app always runs this from a background thread (see the giant
-#      comment on the eager TTS import above) - background threads have no
-#      connected stdin to read from, so input() just hangs forever with no
-#      way to answer it, silently stalling the download.
-#   2. In a packaged AppImage / .exe / .app there usually IS no terminal at
-#      all, so even on the main thread there's nowhere for the prompt to
-#      go or be answered.
-# TTS itself provides an escape hatch: if the COQUI_TOS_AGREED env var is
-# "1", tos_agreed() returns True immediately and ask_tos()/input() is never
-# called. We use that, but only after showing our own real GUI consent
-# dialog (via tkinter messagebox, on the main thread) - so the user still
-# explicitly agrees to the license, they just do it through our UI instead
-# of a terminal prompt they'd never see.
-_XTTS_TOS_MARKER = os.path.join(_MODELS_BASE, ".xtts_tos_agreed")
-
-CPML_TOS_TEXT = (
-    "XTTS-v2 is distributed under Coqui's CPML license, not a fully "
-    "open license.\n\n"
-    "By downloading this model you agree to one of the following:\n"
-    "  \u2022 You have purchased a commercial license from Coqui "
-    "(licensing@coqui.ai), OR\n"
-    "  \u2022 You agree to the terms of the non-commercial CPML "
-    "license (https://coqui.ai/cpml)\n\n"
-    "Do you agree, and want to proceed with the XTTS-v2 download?"
-)
+# Some engines (XTTS-v2's CPML today) require explicit license
+# agreement before their first download. Coqui's own download code
+# blocks on a terminal input() call to get that agreement, which is
+# fatal from a background thread (no stdin to read) and from a packaged
+# app with no terminal at all - see engines/coqui_xtts.py's docstring.
+# This shows a real GUI dialog instead, driven by whatever engine.
+# requires_tos/tos_title/tos_text says, so it automatically covers any
+# future engine that also needs a license click-through.
+def _engine_tos_marker(key):
+    return os.path.join(_MODELS_BASE, f".{key}_tos_agreed")
 
 
-def _xtts_tos_already_agreed():
-    return os.environ.get("COQUI_TOS_AGREED") == "1" or os.path.isfile(_XTTS_TOS_MARKER)
+def _engine_tos_already_agreed(key):
+    spec = TTS_ENGINES.get(key)
+    if not spec or not spec.requires_tos:
+        return True
+    return os.path.isfile(_engine_tos_marker(key))
 
 
-def _apply_xtts_tos_env_if_agreed():
-    """Set COQUI_TOS_AGREED for this process if the user agreed in a past run."""
-    if os.path.isfile(_XTTS_TOS_MARKER):
+def _apply_agreed_tos_env_vars():
+    # Coqui-specific escape hatch: XTTS's tos_agreed() short-circuits to
+    # True (skipping its own input() prompt) if COQUI_TOS_AGREED == "1".
+    # Other engines may need their own env vars/markers when added.
+    if os.path.isfile(_engine_tos_marker("xtts")):
         os.environ["COQUI_TOS_AGREED"] = "1"
 
 
 # Apply immediately at import time (main thread, before any background
 # thread or TTS import), so a returning user never sees the dialog again.
-_apply_xtts_tos_env_if_agreed()
+_apply_agreed_tos_env_vars()
 
 # ──────────────────────────────────────────────────────────────
 #  COLOURS
@@ -244,43 +188,13 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────
 #  LAZY MODEL CACHE
 # ──────────────────────────────────────────────────────────────
-_tts_vctk      = None
-_tts_xtts      = None
+# VCTK/XTTS instance caching now lives inside engines/coqui_vctk.py and
+# engines/coqui_xtts.py respectively (each engine module owns its own
+# lazy-singleton pattern) - see TTS_ENGINES[key].synthesize() call sites
+# below instead of the old get_tts_vctk()/get_tts_xtts() functions that
+# used to be here.
 _whisper_model = None
 _vosk_models   = {}
-
-def get_tts_vctk():
-    global _tts_vctk
-    if _tts_vctk is None:
-        from TTS.api import TTS
-        if os.path.isdir(VCTK_MODEL_PATH):
-            _tts_vctk = TTS(model_path=VCTK_MODEL_PATH,
-                             config_path=os.path.join(VCTK_MODEL_PATH, "config.json"),
-                             progress_bar=False, gpu=False)
-        else:
-            _tts_vctk = TTS(model_name="tts_models/en/vctk/vits",
-                             progress_bar=False, gpu=False)
-    return _tts_vctk
-
-def get_tts_xtts():
-    global _tts_xtts
-    if _tts_xtts is None:
-        import torch
-        import torch.serialization
-        try:
-            from TTS.tts.configs.xtts_config import XttsConfig
-            torch.serialization.add_safe_globals([XttsConfig])
-        except Exception:
-            pass
-        from TTS.api import TTS
-        if os.path.isdir(XTTS_MODEL_PATH):
-            _tts_xtts = TTS(model_path=XTTS_MODEL_PATH,
-                             config_path=os.path.join(XTTS_MODEL_PATH, "config.json"),
-                             progress_bar=False, gpu=False)
-        else:
-            _tts_xtts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-                             progress_bar=False, gpu=False)
-    return _tts_xtts
 
 def get_whisper_model():
     global _whisper_model
@@ -1021,7 +935,7 @@ class AIApp:
             # will hit XTTS's CPML license requirement - resolve it here
             # on the main thread before the loop thread starts (same
             # reasoning as preview/save above).
-            if self._is_xtts() and not self._ensure_xtts_tos():
+            if self._is_xtts() and not self._ensure_engine_tos("xtts"):
                 return
         self._vc_running = True
         self._vc_status.config(text="Running...", fg=GREEN)
@@ -1072,10 +986,10 @@ class AIApp:
                         tmp.close()
                         sid = self.get_selected_speaker_id() if not self._is_xtts() else None
                         if sid:
-                            get_tts_vctk().tts_to_file(text=text, speaker=sid, file_path=tmp.name)
+                            TTS_ENGINES["vctk"].synthesize(text, sid, tmp.name)
                         else:
                             lang = LANG_XTTS.get(self.xtts_lang_var.get(), "en")
-                            get_tts_xtts().tts_to_file(text=text, language=lang, file_path=tmp.name)
+                            TTS_ENGINES["xtts"].synthesize(text, None, tmp.name, lang)
                         pygame.mixer.music.load(tmp.name)
                         pygame.mixer.music.play()
                         while pygame.mixer.music.get_busy() and self._vc_running:
@@ -1191,7 +1105,7 @@ class AIApp:
             # license agreement. Resolve that here on the main thread -
             # Coqui's own code would otherwise hang on input() from
             # inside the background preview thread below.
-            if not self._ensure_xtts_tos():
+            if not self._ensure_engine_tos("xtts"):
                 return
         self._start_loading("Loading model and generating speech...")
         self._set_tts_status("Generating preview...", YELLOW)
@@ -1204,9 +1118,9 @@ class AIApp:
             if self._is_xtts():
                 lang = LANG_XTTS[self.xtts_lang_var.get()]
                 if lang not in XTTS_SUPPORTED: lang = "en"
-                get_tts_xtts().tts_to_file(text=text, language=lang, file_path=tmp.name)
+                TTS_ENGINES["xtts"].synthesize(text, None, tmp.name, lang)
             else:
-                get_tts_vctk().tts_to_file(text=text, speaker=sid, file_path=tmp.name)
+                TTS_ENGINES["vctk"].synthesize(text, sid, tmp.name)
             pygame.mixer.music.load(tmp.name); pygame.mixer.music.play()
             self.root.after(0, self._stop_loading)
             self.root.after(0, lambda: self._set_tts_status("Playing preview...", GREEN))
@@ -1232,7 +1146,7 @@ class AIApp:
             sid = self.get_selected_speaker_id()
             if not sid: messagebox.showerror("Error", "Please select a valid voice."); return
         else:
-            if not self._ensure_xtts_tos():
+            if not self._ensure_engine_tos("xtts"):
                 return
         out = self.get_next_filename()
         if not out: return
@@ -1245,9 +1159,9 @@ class AIApp:
             if self._is_xtts():
                 lang = LANG_XTTS[self.xtts_lang_var.get()]
                 if lang not in XTTS_SUPPORTED: lang = "en"
-                get_tts_xtts().tts_to_file(text=text, language=lang, file_path=out)
+                TTS_ENGINES["xtts"].synthesize(text, None, out, lang)
             else:
-                get_tts_vctk().tts_to_file(text=text, speaker=sid, file_path=out)
+                TTS_ENGINES["vctk"].synthesize(text, sid, out)
             self.root.after(0, self._stop_loading)
             self.root.after(0, lambda: messagebox.showinfo("Saved!", f"Audio saved to:\n{out}"))
             self.root.after(0, lambda: self._set_tts_status("Saved!", GREEN))
@@ -1389,10 +1303,16 @@ def _build_models_frame(self):
 
     # Status rows
     self._model_rows = {}
+    # TTS engine rows are generated from the registry (engines/registry.py)
+    # so adding a new engine there automatically gets a row here too -
+    # nothing in this function needs to change.
+    tts_engine_rows = [
+        (key, spec.display_name, spec.approx_size, spec.description)
+        for key, spec in TTS_ENGINES.items()
+    ]
     models = [
         ("whisper",  "Whisper STT",           "~150 MB",  "Speech recognition"),
-        ("vctk",     "VCTK English voices",    "~100 MB",  "English TTS (100+ voices)"),
-        ("xtts",     "XTTS-v2 Multilingual",  "~2 GB",    "Multilingual TTS (17 languages)"),
+        *tts_engine_rows,
         ("tts_pkg",  "Coqui TTS package",     "pip",      "TTS engine"),
         ("whisper_pkg","Whisper package",      "pip",      "STT engine"),
         ("vosk_pkg", "Vosk package",           "pip",      "Lightweight STT"),
@@ -1492,41 +1412,38 @@ def _do_check_models(self):
     self.root.after(0, lambda o=ok: self._set_model_status("whisper", o,
         "Ready" if o else "Missing"))
 
-    # VCTK
-    self.root.after(0, lambda: self._set_model_status("vctk", None))
-    vctk_local = os.path.join(_MODELS_BASE, "vctk")
-    tts_cache = _get_tts_cache_dir()
-    vctk_cache_dirs = [os.path.join(tts_cache, d) for d in
-        (os.listdir(tts_cache) if os.path.isdir(tts_cache) else []) if "vctk" in d]
-    vctk_cached = any(_dir_has_substantial_file(d) for d in vctk_cache_dirs)
-    ok = _dir_has_substantial_file(vctk_local) or vctk_cached
-    self.root.after(0, lambda o=ok: self._set_model_status("vctk", o,
-        "Ready" if o else "Missing"))
-
-    # XTTS
-    self.root.after(0, lambda: self._set_model_status("xtts", None))
-    xtts_local = os.path.join(_MODELS_BASE, "xtts_v2")
-    xtts_cache_dirs = [os.path.join(tts_cache, d) for d in
-        (os.listdir(tts_cache) if os.path.isdir(tts_cache) else []) if "xtts_v2" in d]
-    xtts_cached = any(_dir_has_substantial_file(d) for d in xtts_cache_dirs)
-    ok = _dir_has_substantial_file(xtts_local) or xtts_cached
-    self.root.after(0, lambda o=ok: self._set_model_status("xtts", o,
-        "Ready" if o else "Missing"))
+    # TTS engines (VCTK, XTTS today; any future engine added to
+    # engines/registry.py is automatically checked here too)
+    for key, spec in TTS_ENGINES.items():
+        self.root.after(0, lambda k=key: self._set_model_status(k, None))
+        try:
+            ok = spec.is_installed()
+        except Exception:
+            ok = False
+        self.root.after(0, lambda k=key, o=ok: self._set_model_status(
+            k, o, "Ready" if o else "Missing"))
 
 
-def _ensure_xtts_tos(self):
-    """Get CPML license agreement for XTTS-v2 via a GUI dialog (main thread
-    only - never call this from inside a background thread). Returns True
-    if the user has agreed (now or in a past run), False if they declined.
+def _ensure_engine_tos(self, key):
+    """Get license agreement for engine `key` via a GUI dialog (main
+    thread only - never call this from inside a background thread).
+    Returns True if the engine needs no agreement, or the user has
+    agreed (now or in a past run); False if they declined.
+
+    Driven entirely by TTS_ENGINES[key].requires_tos/tos_title/tos_text,
+    so any future engine with its own license click-through (not just
+    XTTS's CPML) is automatically covered without new code here.
     """
-    if _xtts_tos_already_agreed():
+    if _engine_tos_already_agreed(key):
         return True
-    agreed = messagebox.askyesno("XTTS-v2 License (CPML)", CPML_TOS_TEXT)
+    spec = TTS_ENGINES[key]
+    agreed = messagebox.askyesno(spec.tos_title, spec.tos_text)
     if agreed:
         os.makedirs(_MODELS_BASE, exist_ok=True)
-        with open(_XTTS_TOS_MARKER, "w", encoding="utf-8") as f:
+        with open(_engine_tos_marker(key), "w", encoding="utf-8") as f:
             f.write("agreed")
-        os.environ["COQUI_TOS_AGREED"] = "1"
+        if key == "xtts":
+            os.environ["COQUI_TOS_AGREED"] = "1"
     return agreed
 
 
@@ -1538,7 +1455,7 @@ def _download_missing(self):
     # background thread, and no terminal at all in a packaged app).
     xtts_status, _ = self._model_rows["xtts"]
     xtts_missing = "Missing" in xtts_status.cget("text")
-    self._xtts_tos_ok = self._ensure_xtts_tos() if xtts_missing else True
+    self._xtts_tos_ok = self._ensure_engine_tos("xtts") if xtts_missing else True
     threading.Thread(target=self._do_download_missing, daemon=True).start()
 
 
@@ -1611,7 +1528,7 @@ def _do_download_missing(self):
 
 
 def _download_one(self, key):
-    if key == "xtts" and not self._ensure_xtts_tos():
+    if key == "xtts" and not self._ensure_engine_tos("xtts"):
         self._set_model_status("xtts", False, "License declined")
         return
     threading.Thread(target=lambda: self._do_download_one(key), daemon=True).start()
@@ -1633,32 +1550,44 @@ def _do_download_one(self, key):
 
 
 def _do_download_model(self, key):
-    import subprocess, sys
     try:
         if key == "whisper":
             import whisper
             whisper.load_model("small")
             self.root.after(0, lambda: self._set_model_status("whisper", True, "Ready"))
-        elif key == "vctk":
-            from TTS.api import TTS
-            TTS(model_name="tts_models/en/vctk/vits", progress_bar=False, gpu=False)
-            self.root.after(0, lambda: self._set_model_status("vctk", True, "Ready"))
-        elif key == "xtts":
-            import torch, torch.serialization
-            try:
-                from TTS.tts.configs.xtts_config import XttsConfig
-                torch.serialization.add_safe_globals([XttsConfig])
-            except Exception:
-                pass
-            from TTS.api import TTS
-            TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-                progress_bar=False, gpu=False)
-            self.root.after(0, lambda: self._set_model_status("xtts", True, "Ready"))
+        elif key in TTS_ENGINES:
+            def on_progress(downloaded, total, k=key):
+                if not total:
+                    return
+                pct = min(100, int(downloaded * 100 / total))
+                mb_done = downloaded / (1024 * 1024)
+                mb_total = total / (1024 * 1024)
+                def _update():
+                    if str(self._dl_bar["mode"]) != "determinate":
+                        self._dl_bar.stop()
+                        self._dl_bar.config(mode="determinate", maximum=100)
+                    self._dl_bar["value"] = pct
+                    self._dl_label.config(
+                        text=f"Downloading {k}... {mb_done:.0f} MB / "
+                             f"{mb_total:.0f} MB ({pct}%)", fg=YELLOW)
+                self.root.after(0, _update)
+
+            TTS_ENGINES[key].download(progress_cb=on_progress)
+            self.root.after(0, lambda k=key: self._set_model_status(k, True, "Ready"))
     except Exception as e:
         self.root.after(0, lambda k=key, err=str(e): self._set_model_status(
             k, False, "Failed"))
         self.root.after(0, lambda err=str(e): self._dl_label.config(
             text=f"Error: {err[:60]}", fg=RED))
+    finally:
+        # Always leave the bar back in indeterminate mode for whatever
+        # download/install comes next - not every download can report
+        # real progress (pip installs, whisper's own downloader), so
+        # this is the safe default the next step starts from.
+        def _reset_bar():
+            self._dl_bar.config(mode="indeterminate")
+            self._dl_bar.start(12)
+        self.root.after(0, _reset_bar)
 
 
 # Patch these methods onto AIApp
@@ -1671,7 +1600,7 @@ AIApp._do_download_missing   = _do_download_missing
 AIApp._download_one          = _download_one
 AIApp._do_download_one       = _do_download_one
 AIApp._do_download_model     = _do_download_model
-AIApp._ensure_xtts_tos       = _ensure_xtts_tos
+AIApp._ensure_engine_tos      = _ensure_engine_tos
 
 
 if __name__ == "__main__":

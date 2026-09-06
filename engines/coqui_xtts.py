@@ -41,7 +41,7 @@ def build(models_base):
             for d in os.listdir(cache) if "xtts_v2" in d
         )
 
-    def download():
+    def download(progress_cb=None):
         import torch, torch.serialization
         try:
             from TTS.tts.configs.xtts_config import XttsConfig
@@ -49,8 +49,10 @@ def build(models_base):
         except Exception:
             pass
         from TTS.api import TTS
-        TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2",
-            progress_bar=False, gpu=False)
+        from .download_progress import progress_hook
+        with progress_hook(progress_cb):
+            TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+                progress_bar=True, gpu=False)
 
     def _get_instance():
         global _instance
